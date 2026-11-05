@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --mac-bg-dark: #1e1e24;
+    --mac-surface-dark: #282830;
+    --mac-sidebar-dark: #19191e;
+    --mac-border-dark: rgba(255, 255, 255, 0.08);
+    --mac-accent: #007aff;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+/* Custom sleek macOS scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* macOS traffic light buttons hover effects */
+.traffic-light {
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.traffic-light:hover {
+  filter: brightness(1.15);
+}
+
+/* Glass effect */
+.mac-glass {
+  background: rgba(30, 31, 38, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}

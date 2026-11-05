@@ -1,0 +1,6 @@
+{
+  "name": "QueryCraft macOS",
+  "description": "macOS-native SQL Studio & Natural Language Query Generator. Design schemas, manage database projects, and translate plain English to optimized SQL with instant execution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
