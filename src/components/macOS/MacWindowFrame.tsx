@@ -149,7 +149,7 @@ export const MacWindowFrame: React.FC<MacWindowFrameProps> = ({
                     className="w-full text-left px-3 py-1.5 hover:bg-white/10 text-white/70 hover:text-white flex items-center space-x-2"
                   >
                     <FileUp className="w-3.5 h-3.5" />
-                    <span>Import SQL DDL Schema…</span>
+                    <span>Import Database Schema…</span>
                   </button>
                 </div>
               )}

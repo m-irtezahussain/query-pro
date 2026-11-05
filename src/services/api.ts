@@ -26,6 +26,17 @@ export interface ExplainSqlResponse {
   complexityRating?: string;
 }
 
+export interface DatabaseConnectionRequest {
+  engine: 'PostgreSQL' | 'MySQL';
+  host: string;
+  port?: number;
+  database: string;
+  schema?: string;
+  user: string;
+  password: string;
+  ssl: boolean;
+}
+
 export async function requestSqlGeneration(
   prompt: string,
   schema: TableDefinition[],
@@ -76,6 +87,22 @@ export async function requestDdlParse(
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.error || 'Failed to parse DDL');
+  }
+  return data;
+}
+
+export async function requestDatabaseIntrospection(
+  connection: DatabaseConnectionRequest
+): Promise<{ tables: TableDefinition[] }> {
+  const response = await fetch('/api/introspect-database', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(connection),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to inspect database schema');
   }
   return data;
 }

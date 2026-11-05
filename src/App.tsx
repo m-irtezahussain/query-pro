@@ -121,7 +121,7 @@ export default function App() {
     const newProj: Project = {
       id: `proj-${Date.now()}`,
       name: projectName,
-      description: 'Imported from raw SQL DDL',
+      description: 'Imported database schema',
       dialect,
       createdAt: Date.now(),
       updatedAt: Date.now(),

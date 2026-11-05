@@ -215,7 +215,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                 className="w-full bg-black/30 border border-white/[0.1] rounded-lg p-3 text-white placeholder-white/30 focus:outline-none focus:border-blue-500 resize-none font-sans"
               />
               <p className="text-[11px] text-white/40">
-                Gemini 3.8 Flash will automatically design normalized tables, relationships, column types, and sample data.
+                Cloudflare Workers AI will automatically design normalized tables, relationships, column types, and sample data.
               </p>
             </div>
           )}

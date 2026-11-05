@@ -216,7 +216,7 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
                   </span>
                 </h2>
                 <p className="text-xs text-white/50">
-                  Ask in plain English. Powered by Gemini 3.8 Flash against your{' '}
+                  Ask in plain English. Powered by Cloudflare Workers AI against your{' '}
                   <span className="text-white/80 font-medium">{project.tables.length} tables</span>.
                 </p>
               </div>

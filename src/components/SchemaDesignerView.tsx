@@ -122,7 +122,7 @@ export const SchemaDesignerView: React.FC<SchemaDesignerViewProps> = ({
     setTimeout(() => setSaveSuccess(false), 2000);
   };
 
-  // Generate realistic mock data for current table with Gemini
+  // Generate realistic mock data for current table with Workers AI
   const handleGenerateSampleData = async () => {
     if (!currentTable) return;
     setIsGeneratingMock(true);
