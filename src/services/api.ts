@@ -34,7 +34,7 @@ export interface DatabaseConnectionRequest {
   schema?: string;
   user: string;
   password: string;
-  ssl: boolean;
+  tlsMode: 'require' | 'verify-full' | 'disable';
 }
 
 export async function requestSqlGeneration(
@@ -93,7 +93,11 @@ export async function requestDdlParse(
 
 export async function requestDatabaseIntrospection(
   connection: DatabaseConnectionRequest
-): Promise<{ tables: TableDefinition[] }> {
+): Promise<{
+  tables: TableDefinition[];
+  connectionId: string;
+  connectionExpiresAt: number;
+}> {
   const response = await fetch('/api/introspect-database', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -104,6 +108,20 @@ export async function requestDatabaseIntrospection(
   if (!response.ok) {
     throw new Error(data.error || 'Failed to inspect database schema');
   }
+  return data;
+}
+
+export async function requestLiveQueryExecution(
+  connectionId: string,
+  sql: string
+): Promise<import('../types/schema').QueryExecutionResult> {
+  const response = await fetch('/api/execute-read-query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, sql }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Live query execution failed');
   return data;
 }
 

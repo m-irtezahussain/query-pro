@@ -116,7 +116,8 @@ export default function App() {
   const handleImportSchema = (
     projectName: string,
     dialect: SqlDialect,
-    tables: TableDefinition[]
+    tables: TableDefinition[],
+    liveConnection?: Project['liveConnection']
   ) => {
     const newProj: Project = {
       id: `proj-${Date.now()}`,
@@ -128,6 +129,7 @@ export default function App() {
       tables,
       savedQueries: [],
       history: [],
+      liveConnection,
     };
     handleCreateProject(newProj);
   };
@@ -164,7 +166,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#121316]">
+    <div className="app-shell">
       {/* macOS Top System Menu Bar */}
       <MacMenuBar
         activeProjectName={activeProject.name}
@@ -176,7 +178,7 @@ export default function App() {
       />
 
       {/* Main macOS Application Window Frame */}
-      <div className="flex-1 min-h-0 w-full overflow-hidden">
+      <div className="app-stage">
         <MacWindowFrame
           activeView={activeView}
           onSwitchView={setActiveView}
@@ -219,13 +221,14 @@ export default function App() {
           )}
 
           {/* View Router */}
-          <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden relative">
+          <main className="app-main">
             {activeView === 'query' && (
               <NaturalLanguageQueryView
                 project={activeProject}
                 activeQuery={activeQuery}
                 onSaveQuery={handleSaveQuery}
                 onUpdateHistory={handleUpdateHistory}
+                onConnectDatabase={() => setIsImportDdlOpen(true)}
               />
             )}
 

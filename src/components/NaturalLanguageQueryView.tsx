@@ -19,7 +19,11 @@ import {
   Zap,
 } from 'lucide-react';
 import { GeneratedQuery, Project, QueryExecutionResult } from '../types/schema';
-import { requestSqlGeneration, requestSqlExplanation } from '../services/api';
+import {
+  requestLiveQueryExecution,
+  requestSqlGeneration,
+  requestSqlExplanation,
+} from '../services/api';
 import { executeProjectSql } from '../services/sqlRunner';
 
 interface NaturalLanguageQueryViewProps {
@@ -27,6 +31,7 @@ interface NaturalLanguageQueryViewProps {
   activeQuery: GeneratedQuery | null;
   onSaveQuery: (query: GeneratedQuery) => void;
   onUpdateHistory: (query: GeneratedQuery) => void;
+  onConnectDatabase: () => void;
 }
 
 export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> = ({
@@ -34,6 +39,7 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
   activeQuery,
   onSaveQuery,
   onUpdateHistory,
+  onConnectDatabase,
 }) => {
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -46,6 +52,22 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
   const [showContext, setShowContext] = useState(false);
   const [customContext, setCustomContext] = useState(project.contextNotes || '');
   const [resultFilter, setResultFilter] = useState('');
+  const liveConnectionExpired = Boolean(
+    project.liveConnection && project.liveConnection.expiresAt <= Date.now()
+  );
+
+  const executeQuery = React.useCallback(
+    async (sql: string) => {
+      if (project.liveConnection) {
+        if (project.liveConnection.expiresAt <= Date.now()) {
+          throw new Error('The live database session has expired. Reconnect the database.');
+        }
+        return requestLiveQueryExecution(project.liveConnection.id, sql);
+      }
+      return executeProjectSql(sql, project.tables);
+    },
+    [project.liveConnection, project.tables]
+  );
 
   // Sync when activeQuery changes from sidebar
   useEffect(() => {
@@ -55,12 +77,14 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
       if (activeQuery.executionResult) {
         setExecutionResult(activeQuery.executionResult);
       } else {
-        // Auto-execute to show results immediately
-        const res = executeProjectSql(activeQuery.sql, project.tables);
-        setExecutionResult(res);
+        executeQuery(activeQuery.sql)
+          .then(setExecutionResult)
+          .catch((executionError) =>
+            setExecutionResult({ success: false, error: executionError.message })
+          );
       }
     }
-  }, [activeQuery, project.tables]);
+  }, [activeQuery, executeQuery]);
 
   // Suggested prompt chips based on active project schema
   const samplePrompts = React.useMemo(() => {
@@ -116,8 +140,12 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
         customContext
       );
 
-      // Execute automatically against the in-memory database
-      const runRes = executeProjectSql(result.sql, project.tables);
+      let runRes: QueryExecutionResult;
+      try {
+        runRes = await executeQuery(result.sql);
+      } catch (executionError: any) {
+        runRes = { success: false, error: executionError.message || 'Query execution failed.' };
+      }
 
       const newQuery: GeneratedQuery = {
         id: `q-${Date.now()}`,
@@ -132,7 +160,7 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
         suggestedIndexes: result.suggestedIndexes,
         followUpQuestions: result.followUpQuestions,
         createdAt: Date.now(),
-        executionResult: runRes,
+        executionResult: project.liveConnection ? undefined : runRes,
       };
 
       setCurrentQuery(newQuery);
@@ -145,14 +173,17 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
     }
   };
 
-  const handleRunQuery = () => {
+  const handleRunQuery = async () => {
     if (!currentQuery) return;
     setIsExecuting(true);
-    setTimeout(() => {
-      const res = executeProjectSql(currentQuery.sql, project.tables);
+    try {
+      const res = await executeQuery(currentQuery.sql);
       setExecutionResult(res);
+    } catch (executionError: any) {
+      setExecutionResult({ success: false, error: executionError.message });
+    } finally {
       setIsExecuting(false);
-    }, 50);
+    }
   };
 
   const handleCopySql = () => {
@@ -198,13 +229,49 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
   }, [executionResult?.rows, resultFilter]);
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#18181f]">
+    <div className="query-workspace">
       {/* Scrollable Content Container */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-5">
+      <div className="query-scroll">
+        {!project.liveConnection && (
+          <div className="mode-banner rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-amber-200">Schema-only mode</p>
+              <p className="text-xs text-amber-100/70 mt-0.5">
+                This saved project is not connected to the live database. Queries run only against saved sample data, so production rows will not appear.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onConnectDatabase}
+              className="shrink-0 rounded-lg bg-amber-300/20 border border-amber-300/30 px-3 py-1.5 text-xs font-medium text-amber-100 hover:bg-amber-300/30"
+            >
+              Connect database
+            </button>
+          </div>
+        )}
+
+        {liveConnectionExpired && (
+          <div className="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-red-200">Live database session expired</p>
+              <p className="text-xs text-red-100/70 mt-0.5">
+                Reconnect to create a new temporary read-only database user.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onConnectDatabase}
+              className="shrink-0 rounded-lg bg-red-300/20 border border-red-300/30 px-3 py-1.5 text-xs font-medium text-red-100 hover:bg-red-300/30"
+            >
+              Reconnect
+            </button>
+          </div>
+        )}
+
         {/* Header & Prompt Card */}
-        <div className="bg-[#202029] border border-white/[0.08] rounded-xl p-4 md:p-5 shadow-lg relative">
-          <div className="flex items-center justify-between mb-2.5">
-            <div className="flex items-center space-x-2">
+        <div className="prompt-card bg-[#202029] border border-white/[0.08] rounded-xl p-4 md:p-5 shadow-lg relative">
+          <div className="prompt-card-header flex items-center justify-between mb-2.5">
+            <div className="prompt-card-title flex items-center space-x-2">
               <span className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
                 <Sparkles className="w-4 h-4 text-amber-300" />
               </span>
@@ -262,7 +329,7 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
               className="w-full bg-[#16161b] border border-white/[0.1] rounded-lg p-3 text-sm text-white placeholder-white/30 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 transition resize-none font-sans"
             />
 
-            <div className="flex items-center justify-between mt-2.5">
+            <div className="prompt-actions flex items-center justify-between mt-2.5">
               <span className="text-[11px] text-white/40 flex items-center space-x-1">
                 <span>Press</span>
                 <kbd className="px-1.5 py-0.5 rounded bg-white/[0.08] border border-white/[0.1] font-mono text-[10px] text-white/70">

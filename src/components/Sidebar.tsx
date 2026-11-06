@@ -54,9 +54,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const totalRows = project.tables.reduce((acc, t) => acc + (t.sampleData?.length || 0), 0);
 
   return (
-    <aside className="w-64 h-full bg-[#17171d]/95 border-r border-white/[0.08] flex flex-col shrink-0 select-none text-[13px]">
+    <aside className="schema-sidebar">
       {/* Top Search bar */}
-      <div className="p-2.5 border-b border-white/[0.06]">
+      <div className="sidebar-search-wrap">
         <div className="relative">
           <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-white/40" />
           <input
@@ -64,13 +64,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             placeholder="Search tables & columns…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-8 pr-2.5 py-1.5 bg-white/[0.05] border border-white/[0.06] rounded-md text-xs text-white placeholder-white/30 focus:outline-none focus:border-blue-500/50 focus:bg-white/[0.08] transition"
+            className="sidebar-search"
           />
         </div>
       </div>
 
       {/* Navigation list */}
-      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
+      <div className="sidebar-scroll">
         {/* Quick Views */}
         <div className="space-y-0.5">
           <button

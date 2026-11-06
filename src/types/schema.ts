@@ -45,6 +45,7 @@ export interface QueryExecutionResult {
   rowCount?: number;
   executionTimeMs?: number;
   error?: string;
+  truncated?: boolean;
 }
 
 export interface Project {
@@ -58,4 +59,9 @@ export interface Project {
   savedQueries: GeneratedQuery[];
   history: GeneratedQuery[];
   contextNotes?: string;
+  liveConnection?: {
+    id: string;
+    engine: 'PostgreSQL' | 'MySQL';
+    expiresAt: number;
+  };
 }

@@ -1,9 +1,17 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { Client as PostgresClient } from 'pg';
 import mysql from 'mysql2/promise';
+import nodeSqlParser from 'node-sql-parser';
 import { z } from 'zod';
 import { TableDefinition } from '../types/schema';
+import { logger, serializeError } from './logger';
+import {
+  provisionReadOnlyUser,
+  ProvisionedDatabaseUser,
+  revokeReadOnlyUser,
+} from './readOnlyUserProvisioning';
 
 export const databaseConnectionSchema = z.strictObject({
   engine: z.enum(['PostgreSQL', 'MySQL']),
@@ -13,10 +21,37 @@ export const databaseConnectionSchema = z.strictObject({
   schema: z.string().trim().min(1).max(128).optional(),
   user: z.string().trim().min(1).max(128),
   password: z.string().min(1).max(1024),
-  ssl: z.boolean().default(true),
+  tlsMode: z.enum(['require', 'verify-full', 'disable']).default('require'),
 });
 
 export type DatabaseConnectionInput = z.infer<typeof databaseConnectionSchema>;
+
+type RegisteredConnection = {
+  connection: DatabaseConnectionInput;
+  adminConnection: DatabaseConnectionInput;
+  provisionedUser: ProvisionedDatabaseUser;
+  resolvedHost: string;
+  expiresAt: number;
+};
+
+const connectionRegistry = new Map<string, RegisteredConnection>();
+const parser = new nodeSqlParser.Parser();
+const connectionTtlMs = 8 * 60 * 60 * 1000;
+const maxResultRows = 500;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of connectionRegistry) {
+    if (entry.expiresAt <= now) {
+      connectionRegistry.delete(id);
+      void revokeReadOnlyUser(
+        entry.adminConnection,
+        entry.resolvedHost,
+        entry.provisionedUser
+      ).catch(() => undefined);
+    }
+  }
+}, 15 * 60 * 1000).unref();
 
 const blockedAddresses = new net.BlockList();
 blockedAddresses.addSubnet('0.0.0.0', 8, 'ipv4');
@@ -59,10 +94,21 @@ function isBlockedAddress(address: string): boolean {
 }
 
 async function resolveSafeHost(host: string): Promise<string> {
+  const startedAt = performance.now();
   const addresses = await dns.lookup(host, { all: true, verbatim: true });
+  logger.debug('database.dns.resolved', {
+    host: normalizedHost(host),
+    addressCount: addresses.length,
+    families: [...new Set(addresses.map(({ family }) => family))],
+    durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+  });
   if (addresses.length === 0) throw new Error('Database host could not be resolved.');
 
   if (!isExplicitlyAllowed(host) && addresses.some(({ address }) => isBlockedAddress(address))) {
+    logger.warn('database.destination.blocked', {
+      host: normalizedHost(host),
+      reason: 'private_or_local_address_not_allowlisted',
+    });
     throw new Error(
       'Private or local database hosts must be listed in DB_CONNECTION_ALLOWED_HOSTS.'
     );
@@ -134,6 +180,16 @@ async function introspectPostgres(
   resolvedHost: string
 ): Promise<TableDefinition[]> {
   const schema = input.schema || 'public';
+  const ssl =
+    input.tlsMode === 'disable'
+      ? false
+      : input.tlsMode === 'verify-full'
+        ? {
+            rejectUnauthorized: true,
+            servername: normalizedHost(input.host),
+            minVersion: 'TLSv1.2' as const,
+          }
+        : { rejectUnauthorized: false, minVersion: 'TLSv1.2' as const };
   const client = new PostgresClient({
     host: resolvedHost,
     port: input.port || 5432,
@@ -143,13 +199,27 @@ async function introspectPostgres(
     connectionTimeoutMillis: 10_000,
     statement_timeout: 15_000,
     application_name: 'querycraft-schema-import',
-    ssl: input.ssl
-      ? { rejectUnauthorized: true, servername: normalizedHost(input.host) }
-      : false,
+    ssl,
   });
 
   try {
+    const connectionStartedAt = performance.now();
+    logger.debug('database.connection.started', {
+      engine: 'PostgreSQL',
+      host: normalizedHost(input.host),
+      port: input.port || 5432,
+      database: input.database,
+      schema,
+      tlsMode: input.tlsMode,
+    });
     await client.connect();
+    logger.info('database.connection.succeeded', {
+      engine: 'PostgreSQL',
+      host: normalizedHost(input.host),
+      database: input.database,
+      durationMs: Math.round((performance.now() - connectionStartedAt) * 100) / 100,
+    });
+    const queryStartedAt = performance.now();
     const result = await client.query<ColumnRow>(
       `SELECT
         c.table_name,
@@ -181,9 +251,15 @@ async function introspectPostgres(
       ORDER BY c.table_name, c.ordinal_position`,
       [schema]
     );
+    logger.debug('database.metadata.query.succeeded', {
+      engine: 'PostgreSQL',
+      rowCount: result.rowCount,
+      durationMs: Math.round((performance.now() - queryStartedAt) * 100) / 100,
+    });
     return rowsToTables(result.rows);
   } finally {
     await client.end().catch(() => undefined);
+    logger.debug('database.connection.closed', { engine: 'PostgreSQL' });
   }
 }
 
@@ -192,6 +268,14 @@ async function introspectMySql(
   resolvedHost: string
 ): Promise<TableDefinition[]> {
   const port = input.port || 3306;
+  const connectionStartedAt = performance.now();
+  logger.debug('database.connection.started', {
+    engine: 'MySQL',
+    host: normalizedHost(input.host),
+    port,
+    database: input.database,
+    tlsMode: input.tlsMode,
+  });
   const connection = await mysql.createConnection({
     host: normalizedHost(input.host),
     port,
@@ -200,12 +284,22 @@ async function introspectMySql(
     password: input.password,
     connectTimeout: 10_000,
     stream: () => net.createConnection({ host: resolvedHost, port }),
-    ssl: input.ssl
-      ? { rejectUnauthorized: true, verifyIdentity: true }
-      : undefined,
+    ssl:
+      input.tlsMode === 'disable'
+        ? undefined
+        : input.tlsMode === 'verify-full'
+          ? { rejectUnauthorized: true, verifyIdentity: true, minVersion: 'TLSv1.2' }
+          : { rejectUnauthorized: false, verifyIdentity: false, minVersion: 'TLSv1.2' },
   });
 
   try {
+    logger.info('database.connection.succeeded', {
+      engine: 'MySQL',
+      host: normalizedHost(input.host),
+      database: input.database,
+      durationMs: Math.round((performance.now() - connectionStartedAt) * 100) / 100,
+    });
+    const queryStartedAt = performance.now();
     const [rows] = await connection.execute(
       `SELECT
         c.TABLE_NAME AS table_name,
@@ -225,22 +319,245 @@ async function introspectMySql(
       ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION`,
       [input.database]
     );
+    logger.debug('database.metadata.query.succeeded', {
+      engine: 'MySQL',
+      rowCount: Array.isArray(rows) ? rows.length : undefined,
+      durationMs: Math.round((performance.now() - queryStartedAt) * 100) / 100,
+    });
     return rowsToTables(rows as ColumnRow[]);
   } finally {
     await connection.end();
+    logger.debug('database.connection.closed', { engine: 'MySQL' });
   }
 }
 
 export async function introspectDatabase(input: DatabaseConnectionInput) {
-  const resolvedHost = await resolveSafeHost(input.host);
-  const tables =
-    input.engine === 'PostgreSQL'
-      ? await introspectPostgres(input, resolvedHost)
-      : await introspectMySql(input, resolvedHost);
+  const startedAt = performance.now();
+  logger.info('database.introspection.started', {
+    engine: input.engine,
+    host: normalizedHost(input.host),
+    port: input.port || (input.engine === 'PostgreSQL' ? 5432 : 3306),
+    database: input.database,
+    schema: input.schema,
+    tlsMode: input.tlsMode,
+  });
 
-  if (tables.length === 0) {
-    throw new Error('No tables were found in the selected database or schema.');
+  let provisioned:
+    | { connection: DatabaseConnectionInput; user: ProvisionedDatabaseUser }
+    | undefined;
+  let resolvedHost: string | undefined;
+  try {
+    resolvedHost = await resolveSafeHost(input.host);
+    provisioned = await provisionReadOnlyUser(input, resolvedHost);
+    const tables =
+      input.engine === 'PostgreSQL'
+        ? await introspectPostgres(provisioned.connection, resolvedHost)
+        : await introspectMySql(provisioned.connection, resolvedHost);
+
+    if (tables.length === 0) {
+      throw new Error('No tables were found in the selected database or schema.');
+    }
+
+    const connectionId = randomUUID();
+    const connectionExpiresAt = Date.now() + connectionTtlMs;
+    connectionRegistry.set(connectionId, {
+      connection: provisioned.connection,
+      adminConnection: { ...input },
+      provisionedUser: provisioned.user,
+      resolvedHost,
+      expiresAt: connectionExpiresAt,
+    });
+    const result = { tables, connectionId, connectionExpiresAt };
+    logger.result('database.introspection.succeeded', result, {
+      engine: input.engine,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    });
+    return result;
+  } catch (error) {
+    if (provisioned && resolvedHost) {
+      await revokeReadOnlyUser(input, resolvedHost, provisioned.user).catch(() => undefined);
+    }
+    logger.error('database.introspection.failed', {
+      engine: input.engine,
+      host: normalizedHost(input.host),
+      database: input.database,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      ...serializeError(error),
+    });
+    throw error;
   }
+}
 
-  return { tables };
+export class ReadQueryError extends Error {
+  constructor(message: string, public statusCode = 400) {
+    super(message);
+    this.name = 'ReadQueryError';
+  }
+}
+
+function assertReadOnlySql(sql: string, engine: 'PostgreSQL' | 'MySQL') {
+  let ast: any;
+  try {
+    ast = parser.astify(sql, { database: engine === 'PostgreSQL' ? 'Postgresql' : 'MySQL' });
+  } catch {
+    throw new ReadQueryError('The query could not be parsed safely. Only SELECT queries are allowed.');
+  }
+  const statements = Array.isArray(ast) ? ast : [ast];
+  const forbiddenTypes = new Set([
+    'alter', 'create', 'delete', 'drop', 'insert', 'replace', 'truncate', 'update',
+  ]);
+  const containsForbiddenNode = (value: unknown, seen = new WeakSet<object>()): boolean => {
+    if (!value || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (
+      'type' in value &&
+      typeof (value as { type?: unknown }).type === 'string' &&
+      forbiddenTypes.has((value as { type: string }).type.toLowerCase())
+    ) {
+      return true;
+    }
+    return Object.values(value).some((child) => containsForbiddenNode(child, seen));
+  };
+  if (
+    statements.length !== 1 ||
+    statements[0]?.type !== 'select' ||
+    containsForbiddenNode(statements[0])
+  ) {
+    throw new ReadQueryError('Only one SELECT or WITH ... SELECT statement is allowed.');
+  }
+}
+
+function getRegisteredConnection(connectionId: string) {
+  const entry = connectionRegistry.get(connectionId);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    if (entry) {
+      connectionRegistry.delete(connectionId);
+      void revokeReadOnlyUser(
+        entry.adminConnection,
+        entry.resolvedHost,
+        entry.provisionedUser
+      ).catch(() => undefined);
+    }
+    throw new ReadQueryError('The live database connection has expired. Reconnect the database.', 410);
+  }
+  return entry.connection;
+}
+
+export async function closeLiveDatabaseConnections(): Promise<void> {
+  const entries = [...connectionRegistry.values()];
+  connectionRegistry.clear();
+  if (entries.length === 0) return;
+
+  logger.info('database.live_connections.closing', { connectionCount: entries.length });
+  await Promise.allSettled(
+    entries.map((entry) =>
+      revokeReadOnlyUser(entry.adminConnection, entry.resolvedHost, entry.provisionedUser)
+    )
+  );
+  logger.info('database.live_connections.closed', { connectionCount: entries.length });
+}
+
+export async function executeReadQuery(connectionId: string, sql: string) {
+  const startedAt = performance.now();
+  const input = getRegisteredConnection(connectionId);
+  assertReadOnlySql(sql, input.engine);
+  const cleanSql = sql.trim().replace(/;+\s*$/, '');
+  const limitedSql = `SELECT * FROM (${cleanSql}) AS querycraft_result LIMIT ${maxResultRows + 1}`;
+  const resolvedHost = await resolveSafeHost(input.host);
+
+  logger.info('database.read_query.started', {
+    engine: input.engine,
+    host: normalizedHost(input.host),
+    database: input.database,
+    sqlLength: sql.length,
+    rowLimit: maxResultRows,
+  });
+
+  try {
+    let rows: Record<string, any>[];
+    let columns: string[];
+    if (input.engine === 'PostgreSQL') {
+      const ssl =
+        input.tlsMode === 'disable'
+          ? false
+          : input.tlsMode === 'verify-full'
+            ? { rejectUnauthorized: true, servername: normalizedHost(input.host), minVersion: 'TLSv1.2' as const }
+            : { rejectUnauthorized: false, minVersion: 'TLSv1.2' as const };
+      const client = new PostgresClient({
+        host: resolvedHost,
+        port: input.port || 5432,
+        database: input.database,
+        user: input.user,
+        password: input.password,
+        ssl,
+        connectionTimeoutMillis: 10_000,
+        application_name: 'querycraft-read-query',
+      });
+      try {
+        await client.connect();
+        await client.query('BEGIN TRANSACTION READ ONLY');
+        await client.query("SET LOCAL statement_timeout = '15000ms'");
+        const result = await client.query(limitedSql);
+        rows = result.rows;
+        columns = result.fields.map((field) => field.name);
+        await client.query('ROLLBACK');
+      } finally {
+        await client.end().catch(() => undefined);
+      }
+    } else {
+      const port = input.port || 3306;
+      const connection = await mysql.createConnection({
+        host: normalizedHost(input.host),
+        port,
+        database: input.database,
+        user: input.user,
+        password: input.password,
+        connectTimeout: 10_000,
+        stream: () => net.createConnection({ host: resolvedHost, port }),
+        multipleStatements: false,
+        ssl:
+          input.tlsMode === 'disable'
+            ? undefined
+            : input.tlsMode === 'verify-full'
+              ? { rejectUnauthorized: true, verifyIdentity: true, minVersion: 'TLSv1.2' }
+              : { rejectUnauthorized: false, verifyIdentity: false, minVersion: 'TLSv1.2' },
+      });
+      try {
+        await connection.query('SET SESSION MAX_EXECUTION_TIME = 15000');
+        await connection.query('START TRANSACTION READ ONLY');
+        const [resultRows, fields] = await connection.query(limitedSql);
+        rows = resultRows as Record<string, any>[];
+        columns = (fields || []).map((field: any) => field.name);
+        await connection.rollback();
+      } finally {
+        await connection.end();
+      }
+    }
+
+    const truncated = rows.length > maxResultRows;
+    if (truncated) rows = rows.slice(0, maxResultRows);
+    const result = {
+      success: true,
+      columns,
+      rows,
+      rowCount: rows.length,
+      truncated,
+      executionTimeMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    };
+    logger.result('database.read_query.succeeded', result, {
+      engine: input.engine,
+      rowCount: rows.length,
+      truncated,
+      durationMs: result.executionTimeMs,
+    });
+    return result;
+  } catch (error) {
+    logger.error('database.read_query.failed', {
+      engine: input.engine,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      ...serializeError(error),
+    });
+    throw error;
+  }
 }

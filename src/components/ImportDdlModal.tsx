@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, Code2, Database, FileUp, RefreshCw, ShieldCheck, X } from 'lucide-react';
-import { SqlDialect, TableDefinition } from '../types/schema';
+import { Project, SqlDialect, TableDefinition } from '../types/schema';
 import {
   DatabaseConnectionRequest,
   requestDatabaseIntrospection,
@@ -10,7 +10,12 @@ import {
 interface ImportDdlModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImportSchema: (projectName: string, dialect: SqlDialect, tables: TableDefinition[]) => void;
+  onImportSchema: (
+    projectName: string,
+    dialect: SqlDialect,
+    tables: TableDefinition[],
+    liveConnection?: Project['liveConnection']
+  ) => void;
 }
 
 const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
@@ -34,7 +39,7 @@ export const ImportDdlModal: React.FC<ImportDdlModalProps> = ({
     schema: 'public',
     user: '',
     password: '',
-    ssl: true,
+    tlsMode: 'require',
   });
 
   useEffect(() => {
@@ -61,11 +66,16 @@ CREATE TABLE posts (
   view_count INT DEFAULT 0
 );`;
 
-  const completeImport = (tables: TableDefinition[], importedDialect: SqlDialect) => {
+  const completeImport = (
+    tables: TableDefinition[],
+    importedDialect: SqlDialect,
+    liveConnection?: Project['liveConnection']
+  ) => {
     onImportSchema(
       projectName.trim() || `Imported ${importedDialect} Schema`,
       importedDialect,
-      tables
+      tables,
+      liveConnection
     );
     setConnection((current) => ({ ...current, password: '' }));
     onClose();
@@ -160,7 +170,11 @@ CREATE TABLE posts (
     setError(null);
     try {
       const result = await requestDatabaseIntrospection(connection);
-      completeImport(result.tables, connection.engine);
+      completeImport(result.tables, connection.engine, {
+        id: result.connectionId,
+        engine: connection.engine,
+        expiresAt: result.connectionExpiresAt,
+      });
     } catch (requestError: any) {
       setError(requestError.message || 'Failed to inspect the database schema.');
     } finally {
@@ -304,8 +318,8 @@ CREATE TABLE posts (
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="space-y-1">
-                  <span className="text-white/60">User</span>
-                  <input autoComplete="username" value={connection.user} onChange={(e) => updateConnection('user', e.target.value)} className="w-full bg-black/30 border border-white/[0.1] rounded-lg px-3 py-1.5 text-white" />
+                  <span className="text-white/60">Provisioning user</span>
+                  <input autoComplete="username" value={connection.user} onChange={(e) => updateConnection('user', e.target.value)} placeholder="e.g. doadmin" className="w-full bg-black/30 border border-white/[0.1] rounded-lg px-3 py-1.5 text-white" />
                 </label>
                 <label className="space-y-1">
                   <span className="text-white/60">Password</span>
@@ -313,14 +327,30 @@ CREATE TABLE posts (
                 </label>
               </div>
 
-              <label className="flex items-center gap-2 text-white/70">
-                <input type="checkbox" checked={connection.ssl} onChange={(e) => updateConnection('ssl', e.target.checked)} />
-                Require TLS certificate verification
+              <label className="space-y-1 block">
+                <span className="text-white/60">TLS mode</span>
+                <select
+                  value={connection.tlsMode}
+                  onChange={(event) =>
+                    updateConnection(
+                      'tlsMode',
+                      event.target.value as DatabaseConnectionRequest['tlsMode']
+                    )
+                  }
+                  className="w-full bg-[#181822] border border-white/[0.1] rounded-lg px-3 py-1.5 text-white"
+                >
+                  <option value="require">Require encryption — managed DB compatible</option>
+                  <option value="verify-full">Verify with system CA — strict verification</option>
+                  <option value="disable">Disable TLS — local development only</option>
+                </select>
+                <span className="block text-[11px] text-white/40">
+                  Require encryption works with DigitalOcean and similar providers without a CA upload. Strict verification can reject provider-specific certificate chains.
+                </span>
               </label>
 
               <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 text-emerald-200/80 flex gap-2">
                 <ShieldCheck className="w-4 h-4 shrink-0" />
-                <span>The password is sent only for this import, kept in memory briefly, and never added to the saved project. Only metadata is read—table rows are not downloaded.</span>
+                <span>The supplied account is used to create a temporary read-only database user, so it must be allowed to create users/roles and grant access. For DigitalOcean PostgreSQL, use the cluster's doadmin account. QueryCraft then uses only the restricted temporary user for schema discovery and live queries. Both passwords stay in backend memory and are never added to the saved project.</span>
               </div>
             </div>
           )}

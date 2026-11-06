@@ -49,7 +49,7 @@ Open the project menu and choose **Import Database Schema**. You can:
 - Paste SQL DDL and parse it with Workers AI.
 - Connect to PostgreSQL or MySQL and import table metadata.
 
-Database passwords are used only for the import request and are not saved. The importer reads metadata from `information_schema`; it does not download table rows. Imported projects are saved in the browser's local storage and are available when you return in the same browser.
+When connecting a database, supply a PostgreSQL account with `CREATEROLE` plus permission to grant access to the selected database/schema, or a MySQL account with `CREATE USER` and `GRANT OPTION`. QueryCraft creates a randomly named temporary account with read-only access, uses that restricted account for schema discovery and live queries, and attempts to drop it when the eight-hour connection expires or the server shuts down cleanly. PostgreSQL accounts also receive a database-enforced eight-hour login expiry. Passwords are kept only in backend memory and are never saved in the project or returned to the browser.
 
 For security, private and local database hosts are blocked by default. To permit a trusted private host or Docker service, add its exact hostname to `.env`:
 
@@ -57,7 +57,47 @@ For security, private and local database hosts are blocked by default. To permit
 DB_CONNECTION_ALLOWED_HOSTS=db.internal.example,postgres
 ```
 
-Keep TLS enabled whenever the database supports it. Use a read-only database account that can access schema metadata but not application data.
+The connection form defaults to **Require encryption**, which works with DigitalOcean and similar managed databases without uploading a CA certificate. It encrypts traffic but does not verify the server certificate identity. Choose **Verify with system CA** when the provider certificate is trusted by Node's system trust store, or **Disable TLS** only for isolated local development.
+
+## Backend logs
+
+The backend writes structured JSON logs to stdout and stderr. Docker Compose captures them automatically:
+
+```sh
+docker compose logs -f querycraft
+```
+
+Use debug logging for connection and provider troubleshooting:
+
+```env
+LOG_LEVEL=debug
+```
+
+Successful operations log result summaries by default. To temporarily include redacted result payloads such as generated SQL and imported schema objects:
+
+```env
+LOG_RESULT_PAYLOADS=true
+```
+
+Restart the container after changing logging settings. Do not leave result payload logging enabled longer than necessary because schemas and generated SQL may contain business-sensitive information. Passwords, API tokens, authorization headers, cookies, and credential fields are centrally redacted.
+
+## Large schemas and AI context
+
+Before an AI request, QueryCraft automatically removes sample rows and nonessential metadata, ranks tables against the question, includes related tables, and limits the schema sent to Workers AI. Defaults can be adjusted in `.env`:
+
+```env
+CLOUDFLARE_AI_MAX_TOKENS=4096
+AI_SCHEMA_MAX_TABLES=25
+AI_SCHEMA_MAX_COLUMNS_PER_TABLE=40
+```
+
+The backend emits an `ai.schema.compacted` log containing the original and selected table/column counts. Increasing these values can exceed the selected model's context window; decrease them for unusually wide schemas.
+
+## Live read queries
+
+Projects imported through a PostgreSQL or MySQL connection execute generated SQL against that live database for eight hours, or until the backend restarts. The original account and generated read-only credentials remain only in backend memory; the browser stores an opaque connection handle. If the process is killed without a graceful shutdown, an orphaned account may remain; administrators can identify it by the `querycraft_read_` PostgreSQL prefix or `querycraft_r_` MySQL prefix and remove it after confirming there is no active QueryCraft session.
+
+Live execution accepts one `SELECT` or `WITH ... SELECT` statement, runs it in a database read-only transaction, applies a 15-second timeout, and returns at most 500 rows. `INSERT`, `UPDATE`, `DELETE`, DDL, and stacked statements are rejected before execution and are also blocked by the read-only transaction. Always connect with a dedicated database account that has only `SELECT` privileges; database permissions remain the final security boundary.
 
 ## Local development
 
