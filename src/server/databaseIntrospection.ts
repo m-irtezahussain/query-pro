@@ -189,7 +189,11 @@ async function introspectPostgres(
             servername: normalizedHost(input.host),
             minVersion: 'TLSv1.2' as const,
           }
-        : { rejectUnauthorized: false, minVersion: 'TLSv1.2' as const };
+        : {
+            rejectUnauthorized: false,
+            servername: normalizedHost(input.host),
+            minVersion: 'TLSv1.2' as const,
+          };
   const client = new PostgresClient({
     host: resolvedHost,
     port: input.port || 5432,
@@ -458,6 +462,15 @@ export async function closeLiveDatabaseConnections(): Promise<void> {
   logger.info('database.live_connections.closed', { connectionCount: entries.length });
 }
 
+export async function disconnectLiveDatabaseConnection(connectionId: string): Promise<boolean> {
+  const entry = connectionRegistry.get(connectionId);
+  if (!entry) return false;
+
+  connectionRegistry.delete(connectionId);
+  await revokeReadOnlyUser(entry.adminConnection, entry.resolvedHost, entry.provisionedUser);
+  return true;
+}
+
 export async function executeReadQuery(connectionId: string, sql: string) {
   const startedAt = performance.now();
   const input = getRegisteredConnection(connectionId);
@@ -483,7 +496,7 @@ export async function executeReadQuery(connectionId: string, sql: string) {
           ? false
           : input.tlsMode === 'verify-full'
             ? { rejectUnauthorized: true, servername: normalizedHost(input.host), minVersion: 'TLSv1.2' as const }
-            : { rejectUnauthorized: false, minVersion: 'TLSv1.2' as const };
+            : { rejectUnauthorized: false, servername: normalizedHost(input.host), minVersion: 'TLSv1.2' as const };
       const client = new PostgresClient({
         host: resolvedHost,
         port: input.port || 5432,
@@ -558,6 +571,14 @@ export async function executeReadQuery(connectionId: string, sql: string) {
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
       ...serializeError(error),
     });
+    const databaseError = error as { code?: string; message?: string };
+    const userCorrectableCodes = new Set(['42601', '42702', '42703', '42883', '42P01']);
+    if (databaseError.code && userCorrectableCodes.has(databaseError.code)) {
+      throw new ReadQueryError(
+        `PostgreSQL rejected the generated query: ${databaseError.message || 'invalid SQL identifiers or syntax.'}`,
+        422
+      );
+    }
     throw error;
   }
 }

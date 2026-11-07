@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   databaseConnectionSchema,
   closeLiveDatabaseConnections,
+  disconnectLiveDatabaseConnection,
   executeReadQuery,
   introspectDatabase,
   ReadQueryError,
@@ -17,6 +18,7 @@ import {
   withRequestContext,
 } from './src/server/logger';
 import { compactSchemaForPrompt } from './src/server/schemaCompaction';
+import { quotePostgresSchemaIdentifiers } from './src/server/sqlIdentifierQuoting';
 
 dotenv.config({ quiet: true });
 
@@ -129,6 +131,25 @@ app.post('/api/execute-read-query', async (req: Request, res: Response) => {
     }
     return res.status(502).json({
       error: 'The read query could not be executed. Check the backend logs using the request ID.',
+    });
+  }
+});
+
+const disconnectDatabaseSchema = z.strictObject({ connectionId: z.uuid() });
+
+app.post('/api/disconnect-database', async (req: Request, res: Response) => {
+  const parsed = disconnectDatabaseSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(422).json({ error: 'A valid connection ID is required.' });
+  }
+
+  try {
+    const disconnected = await disconnectLiveDatabaseConnection(parsed.data.connectionId);
+    return res.json({ disconnected });
+  } catch (error) {
+    logger.error('database.disconnect.failed', serializeError(error));
+    return res.status(502).json({
+      error: 'The saved project was removed, but its temporary database user could not be revoked automatically.',
     });
   }
 });
@@ -359,7 +380,7 @@ Target SQL Dialect: ${dialect}.
 Rules:
 1. Ground your query strictly in the provided schema (table names, column names, relationships).
 2. Adhere strictly to the requested dialect's syntax (${dialect}):
-   - PostgreSQL: double quotes for case-sensitive identifiers if needed, ILIKE for case-insensitive, LIMIT/OFFSET, proper DATE/TIMESTAMP casting (e.g. NOW() - INTERVAL '30 days').
+   - PostgreSQL: preserve every table and column name exactly as supplied. Always double-quote any identifier containing uppercase letters or other case-sensitive characters. Use ILIKE for case-insensitive matching, LIMIT/OFFSET, and proper DATE/TIMESTAMP casting (e.g. NOW() - INTERVAL '30 days').
    - MySQL: backticks, LIKE, DATE_SUB(NOW(), INTERVAL 30 DAY), LIMIT.
    - SQLite: strftime for dates, simple types, double quotes or backticks, standard joins.
    - SQL Server: TOP N, DATEADD, DATEDIFF, square brackets [col].
@@ -392,6 +413,9 @@ Generate the SQL query and details. Return strictly a JSON object following the 
       },
       required: ['sql', 'explanation', 'tablesUsed'],
     });
+    if (dialect === 'PostgreSQL' && typeof parsed.sql === 'string') {
+      parsed.sql = quotePostgresSchemaIdentifiers(parsed.sql, schema);
+    }
     logger.result('api.generate_sql.succeeded', parsed, { dialect });
     return res.json(parsed);
   } catch (error: any) {

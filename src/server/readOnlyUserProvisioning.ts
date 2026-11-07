@@ -29,14 +29,18 @@ function postgresLiteral(value: string): string {
 
 function postgresSsl(input: DatabaseConnectionInput) {
   if (input.tlsMode === 'disable') return false;
+  const servername = normalizedHost(input.host);
   if (input.tlsMode === 'verify-full') {
     return {
       rejectUnauthorized: true,
-      servername: normalizedHost(input.host),
+      servername,
       minVersion: 'TLSv1.2' as const,
     };
   }
-  return { rejectUnauthorized: false, minVersion: 'TLSv1.2' as const };
+  // Connections use the DNS-resolved IP to prevent DNS rebinding/SSRF. Keep the
+  // original hostname as TLS SNI so multi-tenant proxies such as Neon can route
+  // the connection without requiring an endpoint option or uploaded certificate.
+  return { rejectUnauthorized: false, servername, minVersion: 'TLSv1.2' as const };
 }
 
 function mysqlSsl(input: DatabaseConnectionInput) {

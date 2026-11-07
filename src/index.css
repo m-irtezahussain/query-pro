@@ -161,6 +161,23 @@
 .floating-menu button > svg { inline-size: 15px; }
 .floating-menu .project-icon { inline-size: 30px; block-size: 30px; }
 .menu-project-copy { flex: 1; }
+.project-menu-entry { display: flex; align-items: center; gap: .25rem; }
+.project-menu-entry .project-menu-select { min-inline-size: 0; flex: 1; }
+.project-menu-entry .project-delete-trigger {
+  inline-size: 34px; min-inline-size: 34px; padding: 0; justify-content: center; color: #718098;
+}
+.project-menu-entry .project-delete-trigger:hover { color: #ff8e98; background: rgba(239,68,68,.12); }
+.project-delete-confirm {
+  margin: .25rem 0 .5rem; padding: .7rem; border: 1px solid rgba(239,68,68,.22); border-radius: 9px;
+  background: rgba(127,29,29,.15);
+}
+.project-delete-confirm > div:first-child { display: grid; gap: .2rem; }
+.project-delete-confirm strong { color: #fecdd3; font-size: .72rem; }
+.project-delete-confirm span { color: #9ca8ba; font-size: .65rem; line-height: 1.45; }
+.project-delete-actions { display: flex; justify-content: flex-end; gap: .35rem; margin-block-start: .6rem; }
+.project-delete-actions button { inline-size: auto; min-block-size: 30px; padding-inline: .65rem; }
+.project-delete-actions button.confirm-delete { color: #fff1f2; background: rgba(220,38,38,.72); }
+.project-delete-actions button.confirm-delete:hover { background: rgba(239,68,68,.88); }
 .menu-label { margin: .25rem .55rem .4rem; color: #65738c; font-size: .6rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .menu-check { margin-inline-start: auto; color: #9b8fff; }
 .menu-separator { block-size: 1px; margin: .35rem; background: var(--line); }

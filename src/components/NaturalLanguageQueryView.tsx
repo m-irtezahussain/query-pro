@@ -17,6 +17,7 @@ import {
   Terminal,
   FileCode,
   Zap,
+  Database,
 } from 'lucide-react';
 import { GeneratedQuery, Project, QueryExecutionResult } from '../types/schema';
 import {
@@ -227,6 +228,11 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
       Object.values(row).some((val) => String(val).toLowerCase().includes(query))
     );
   }, [executionResult?.rows, resultFilter]);
+  const connectionNeedsReconnect = Boolean(
+    project.liveConnection &&
+    executionResult?.error &&
+    /connection (?:has )?expired|reconnect the database/i.test(executionResult.error)
+  );
 
   return (
     <div className="query-workspace">
@@ -643,13 +649,25 @@ export const NaturalLanguageQueryView: React.FC<NaturalLanguageQueryViewProps> =
                         {executionResult.error}
                       </p>
                       <p className="text-white/50 text-[11px]">
-                        The generated query uses specific dialect features for {project.dialect}. You can copy the SQL directly to run in your production database or adjust constraints.
+                        {connectionNeedsReconnect
+                          ? 'The backend session is no longer available. Reconnect to create a fresh temporary read-only database user.'
+                          : `The generated query uses specific dialect features for ${project.dialect}. You can copy the SQL directly to run in your production database or adjust constraints.`}
                       </p>
+                      {connectionNeedsReconnect && (
+                        <button
+                          type="button"
+                          onClick={onConnectDatabase}
+                          className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-500"
+                        >
+                          <Database className="w-3.5 h-3.5" />
+                          Reconnect database
+                        </button>
+                      )}
                     </div>
                   )
                 ) : (
                   <div className="p-8 text-center text-white/40 text-xs">
-                    Click "Run Query" to execute on the project's in-memory SQLite database.
+                    Click "Run Query" to execute on the {project.liveConnection ? 'connected database' : "project's in-memory SQLite database"}.
                   </div>
                 )}
               </div>

@@ -10,6 +10,10 @@ import {
 interface ImportDdlModalProps {
   isOpen: boolean;
   onClose: () => void;
+  connectionOnly?: boolean;
+  isReconnect?: boolean;
+  initialProjectName?: string;
+  initialConnection?: Partial<DatabaseConnectionRequest>;
   onImportSchema: (
     projectName: string,
     dialect: SqlDialect,
@@ -19,10 +23,24 @@ interface ImportDdlModalProps {
 }
 
 const MAX_SCHEMA_FILE_BYTES = 1024 * 1024;
+const DEFAULT_CONNECTION: DatabaseConnectionRequest = {
+  engine: 'PostgreSQL',
+  host: '',
+  port: 5432,
+  database: '',
+  schema: 'public',
+  user: '',
+  password: '',
+  tlsMode: 'require',
+};
 
 export const ImportDdlModal: React.FC<ImportDdlModalProps> = ({
   isOpen,
   onClose,
+  connectionOnly = false,
+  isReconnect = false,
+  initialProjectName = '',
+  initialConnection,
   onImportSchema,
 }) => {
   const [mode, setMode] = useState<'file' | 'connection'>('file');
@@ -31,22 +49,19 @@ export const ImportDdlModal: React.FC<ImportDdlModalProps> = ({
   const [ddl, setDdl] = useState('');
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connection, setConnection] = useState<DatabaseConnectionRequest>({
-    engine: 'PostgreSQL',
-    host: '',
-    port: 5432,
-    database: '',
-    schema: 'public',
-    user: '',
-    password: '',
-    tlsMode: 'require',
-  });
+  const [connection, setConnection] = useState<DatabaseConnectionRequest>(DEFAULT_CONNECTION);
 
   useEffect(() => {
-    if (!isOpen) {
-      setConnection((current) => ({ ...current, password: '' }));
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
+    setMode(connectionOnly ? 'connection' : 'file');
+    setProjectName(initialProjectName);
+    setError(null);
+    setConnection({
+      ...DEFAULT_CONNECTION,
+      ...initialConnection,
+      password: '',
+    });
+  }, [isOpen, connectionOnly, initialProjectName, initialConnection]);
 
   if (!isOpen) return null;
 
@@ -174,6 +189,14 @@ CREATE TABLE posts (
         id: result.connectionId,
         engine: connection.engine,
         expiresAt: result.connectionExpiresAt,
+        profile: {
+          host: connection.host.trim(),
+          port: connection.port,
+          database: connection.database.trim(),
+          schema: connection.schema?.trim() || undefined,
+          user: connection.user.trim(),
+          tlsMode: connection.tlsMode,
+        },
       });
     } catch (requestError: any) {
       setError(requestError.message || 'Failed to inspect the database schema.');
@@ -193,7 +216,11 @@ CREATE TABLE posts (
         <div className="h-12 bg-[#252533] border-b border-white/[0.08] px-5 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2">
             <Database className="w-4 h-4 text-blue-400" />
-            <h3 className="text-sm font-semibold text-white">Import Database Schema</h3>
+            <h3 className="text-sm font-semibold text-white">
+              {connectionOnly
+                ? isReconnect ? 'Reconnect Database' : 'Connect Database'
+                : 'Import Database Schema'}
+            </h3>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-md text-white/50 hover:text-white">
             <X className="w-4 h-4" />
@@ -201,7 +228,7 @@ CREATE TABLE posts (
         </div>
 
         <div className="p-5 space-y-4 text-xs overflow-y-auto">
-          <div className="flex items-center p-1 bg-black/30 rounded-lg border border-white/[0.08]">
+          {!connectionOnly && <div className="flex items-center p-1 bg-black/30 rounded-lg border border-white/[0.08]">
             <button
               onClick={() => { setMode('file'); setError(null); }}
               className={`flex-1 py-1.5 rounded-md font-medium flex items-center justify-center gap-1.5 ${mode === 'file' ? 'bg-blue-600 text-white' : 'text-white/60 hover:text-white'}`}
@@ -214,7 +241,13 @@ CREATE TABLE posts (
             >
               <Database className="w-3.5 h-3.5" /> Connect to database
             </button>
-          </div>
+          </div>}
+
+          {isReconnect && (
+            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-3 text-blue-100/80">
+              Re-enter the provisioning password to create a fresh eight-hour read-only session. QueryCraft does not save database passwords in the browser.
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1">
@@ -344,7 +377,7 @@ CREATE TABLE posts (
                   <option value="disable">Disable TLS — local development only</option>
                 </select>
                 <span className="block text-[11px] text-white/40">
-                  Require encryption works with DigitalOcean and similar providers without a CA upload. Strict verification can reject provider-specific certificate chains.
+                  Require encryption works with Neon, DigitalOcean, and similar providers without a CA upload. Strict verification can reject provider-specific certificate chains.
                 </span>
               </label>
 
@@ -366,7 +399,13 @@ CREATE TABLE posts (
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium shadow-lg shadow-blue-600/30"
           >
             {isWorking ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
-            <span>{isWorking ? 'Importing schema…' : mode === 'file' ? 'Parse & Save Schema' : 'Connect & Save Schema'}</span>
+            <span>
+              {isWorking
+                ? isReconnect ? 'Reconnecting…' : 'Importing schema…'
+                : mode === 'file'
+                  ? 'Parse & Save Schema'
+                  : isReconnect ? 'Reconnect & Refresh Schema' : 'Connect & Save Schema'}
+            </span>
           </button>
         </div>
       </div>

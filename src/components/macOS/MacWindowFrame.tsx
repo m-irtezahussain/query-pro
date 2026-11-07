@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Code2, Database, FileUp, FolderPlus, Menu, Network, PanelLeftClose, PanelLeftOpen, Sparkles, Table2 } from 'lucide-react';
+import { Check, ChevronDown, Code2, Database, FileUp, FolderPlus, Menu, Network, PanelLeftClose, PanelLeftOpen, Sparkles, Table2, Trash2, X } from 'lucide-react';
 import { Project, SqlDialect } from '../../types/schema';
 
 type View = 'query' | 'schema' | 'er' | 'ddl';
@@ -13,6 +13,7 @@ interface MacWindowFrameProps {
   projects: Project[];
   activeProject: Project;
   onSelectProject: (id: string) => void;
+  onDeleteProject: (id: string) => void | Promise<void>;
   onNewProject: () => void;
   onImportDdl: () => void;
   onChangeDialect: (dialect: SqlDialect) => void;
@@ -28,9 +29,11 @@ const views = [
 
 export const MacWindowFrame: React.FC<MacWindowFrameProps> = ({
   children, activeView, onSwitchView, isSidebarOpen, onToggleSidebar, projects,
-  activeProject, onSelectProject, onNewProject, onImportDdl, onChangeDialect,
+  activeProject, onSelectProject, onDeleteProject, onNewProject, onImportDdl, onChangeDialect,
 }) => {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [projectPendingDelete, setProjectPendingDelete] = useState<string | null>(null);
+  const [projectBeingDeleted, setProjectBeingDeleted] = useState<string | null>(null);
   const [dialectMenuOpen, setDialectMenuOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const dialectMenuRef = useRef<HTMLDivElement>(null);
@@ -39,7 +42,10 @@ export const MacWindowFrame: React.FC<MacWindowFrameProps> = ({
   useEffect(() => {
     const closeMenus = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!projectMenuRef.current?.contains(target)) setProjectMenuOpen(false);
+      if (!projectMenuRef.current?.contains(target)) {
+        setProjectMenuOpen(false);
+        setProjectPendingDelete(null);
+      }
       if (!dialectMenuRef.current?.contains(target)) setDialectMenuOpen(false);
     };
     window.addEventListener('pointerdown', closeMenus);
@@ -63,11 +69,51 @@ export const MacWindowFrame: React.FC<MacWindowFrameProps> = ({
               <div className="floating-menu project-menu">
                 <p className="menu-label">Your workspaces</p>
                 {projects.map((project) => (
-                  <button type="button" key={project.id} onClick={() => { onSelectProject(project.id); setProjectMenuOpen(false); }}>
-                    <span className="project-icon"><Database /></span>
-                    <span className="menu-project-copy"><strong>{project.name}</strong><small>{project.dialect} · {project.tables.length} tables</small></span>
-                    {project.id === activeProject.id && <Check className="menu-check" />}
-                  </button>
+                  <React.Fragment key={project.id}>
+                    <div className="project-menu-entry">
+                      <button type="button" className="project-menu-select" onClick={() => { onSelectProject(project.id); setProjectMenuOpen(false); }}>
+                        <span className="project-icon"><Database /></span>
+                        <span className="menu-project-copy"><strong>{project.name}</strong><small>{project.dialect} · {project.tables.length} tables</small></span>
+                        {project.id === activeProject.id && <Check className="menu-check" />}
+                      </button>
+                      {projects.length > 1 && (
+                        <button
+                          type="button"
+                          className="project-delete-trigger"
+                          onClick={() => setProjectPendingDelete(project.id)}
+                          aria-label={`Remove ${project.name}`}
+                          title="Remove saved database"
+                        >
+                          <Trash2 />
+                        </button>
+                      )}
+                    </div>
+                    {projectPendingDelete === project.id && (
+                      <div className="project-delete-confirm" role="alert">
+                        <div>
+                          <strong>Remove “{project.name}”?</strong>
+                          <span>This clears its saved schema and query history from this browser. The real database is not deleted.</span>
+                        </div>
+                        <div className="project-delete-actions">
+                          <button type="button" onClick={() => setProjectPendingDelete(null)}><X /> Cancel</button>
+                          <button
+                            type="button"
+                            className="confirm-delete"
+                            disabled={projectBeingDeleted === project.id}
+                            onClick={async () => {
+                              setProjectBeingDeleted(project.id);
+                              await onDeleteProject(project.id);
+                              setProjectBeingDeleted(null);
+                              setProjectPendingDelete(null);
+                              setProjectMenuOpen(false);
+                            }}
+                          >
+                            <Trash2 /> {projectBeingDeleted === project.id ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </React.Fragment>
                 ))}
                 <div className="menu-separator" />
                 <button type="button" onClick={() => { onNewProject(); setProjectMenuOpen(false); }}><FolderPlus /> Create workspace</button>

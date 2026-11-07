@@ -11,6 +11,7 @@ import { RawDdlView } from './components/RawDdlView';
 import { NewProjectModal } from './components/NewProjectModal';
 import { ImportDdlModal } from './components/ImportDdlModal';
 import { CommandPalette } from './components/CommandPalette';
+import { requestDatabaseDisconnect } from './services/api';
 
 const STORAGE_KEY = 'querycraft_projects_v2';
 const ACTIVE_PROJ_KEY = 'querycraft_active_proj_id';
@@ -47,6 +48,7 @@ export default function App() {
   // Modals
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isImportDdlOpen, setIsImportDdlOpen] = useState(false);
+  const [connectionTargetProjectId, setConnectionTargetProjectId] = useState<string | null>(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
   // Active project reference
@@ -119,6 +121,27 @@ export default function App() {
     tables: TableDefinition[],
     liveConnection?: Project['liveConnection']
   ) => {
+    if (connectionTargetProjectId && liveConnection) {
+      setProjects((previous) => previous.map((project) =>
+        project.id === connectionTargetProjectId
+          ? {
+              ...project,
+              name: projectName || project.name,
+              dialect,
+              tables,
+              liveConnection,
+              updatedAt: Date.now(),
+            }
+          : project
+      ));
+      setActiveProjectId(connectionTargetProjectId);
+      setActiveTableId(tables[0]?.id || null);
+      setActiveQuery(null);
+      setActiveView('query');
+      setConnectionTargetProjectId(null);
+      return;
+    }
+
     const newProj: Project = {
       id: `proj-${Date.now()}`,
       name: projectName,
@@ -132,6 +155,34 @@ export default function App() {
       liveConnection,
     };
     handleCreateProject(newProj);
+  };
+
+  const openDatabaseReconnect = () => {
+    setConnectionTargetProjectId(activeProject.id);
+    setIsImportDdlOpen(true);
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    if (projects.length <= 1) return;
+    const projectToDelete = projects.find((project) => project.id === projectId);
+    const remainingProjects = projects.filter((project) => project.id !== projectId);
+
+    setProjects(remainingProjects);
+    if (projectId === activeProjectId) {
+      const nextProject = remainingProjects[0];
+      setActiveProjectId(nextProject.id);
+      setActiveTableId(nextProject.tables[0]?.id || null);
+      setActiveQuery(null);
+      setActiveView('query');
+    }
+
+    if (projectToDelete?.liveConnection?.id) {
+      try {
+        await requestDatabaseDisconnect(projectToDelete.liveConnection.id);
+      } catch (error) {
+        console.error('Failed to revoke the temporary database user:', error);
+      }
+    }
   };
 
   const handleChangeDialect = (dialect: SqlDialect) => {
@@ -194,8 +245,12 @@ export default function App() {
             }
             setActiveQuery(null);
           }}
+          onDeleteProject={handleDeleteProject}
           onNewProject={() => setIsNewProjectOpen(true)}
-          onImportDdl={() => setIsImportDdlOpen(true)}
+          onImportDdl={() => {
+            setConnectionTargetProjectId(null);
+            setIsImportDdlOpen(true);
+          }}
           onChangeDialect={handleChangeDialect}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
         >
@@ -228,7 +283,7 @@ export default function App() {
                 activeQuery={activeQuery}
                 onSaveQuery={handleSaveQuery}
                 onUpdateHistory={handleUpdateHistory}
-                onConnectDatabase={() => setIsImportDdlOpen(true)}
+                onConnectDatabase={openDatabaseReconnect}
               />
             )}
 
@@ -265,7 +320,21 @@ export default function App() {
 
       <ImportDdlModal
         isOpen={isImportDdlOpen}
-        onClose={() => setIsImportDdlOpen(false)}
+        onClose={() => {
+          setIsImportDdlOpen(false);
+          setConnectionTargetProjectId(null);
+        }}
+        connectionOnly={Boolean(connectionTargetProjectId)}
+        isReconnect={Boolean(connectionTargetProjectId && activeProject.liveConnection)}
+        initialProjectName={connectionTargetProjectId ? activeProject.name : ''}
+        initialConnection={
+          connectionTargetProjectId && activeProject.liveConnection
+            ? {
+                engine: activeProject.liveConnection.engine,
+                ...activeProject.liveConnection.profile,
+              }
+            : undefined
+        }
         onImportSchema={handleImportSchema}
       />
 

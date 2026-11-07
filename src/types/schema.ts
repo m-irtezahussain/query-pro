@@ -63,5 +63,13 @@ export interface Project {
     id: string;
     engine: 'PostgreSQL' | 'MySQL';
     expiresAt: number;
+    profile?: {
+      host: string;
+      port?: number;
+      database: string;
+      schema?: string;
+      user: string;
+      tlsMode: 'require' | 'verify-full' | 'disable';
+    };
   };
 }

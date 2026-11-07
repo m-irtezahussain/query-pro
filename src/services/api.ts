@@ -125,6 +125,18 @@ export async function requestLiveQueryExecution(
   return data;
 }
 
+export async function requestDatabaseDisconnect(connectionId: string): Promise<void> {
+  const response = await fetch('/api/disconnect-database', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId }),
+  });
+  if (!response.ok) {
+    const data = await response.json();
+    throw new Error(data.error || 'Failed to close the live database session');
+  }
+}
+
 export async function requestSqlExplanation(
   sql: string,
   schema: TableDefinition[],
